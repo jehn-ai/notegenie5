@@ -20,7 +20,7 @@ Allowed_Extension=["pdf","txt","docx"]
 def extract_text(file: UploadFile):
     ext = file.filename.split(".")[-1].lower() #makes the extracted text all in lower caps
     if ext not in Allowed_Extension:
-        raise HTTPException(status_code=404,detail="The Uploaded File Format is not supported, Try:pdf,txt,docx,png,jpeg,jpg ")
+        raise HTTPException(status_code=404,detail= f"The Uploaded File Format is not supported,Try: {Allowed_Extension} ")
     
     text = ""
 #extract for text
