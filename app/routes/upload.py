@@ -1,7 +1,8 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from PyPDF2 import PdfReader
 from pdf2image import convert_from_bytes
 from concurrent.futures import ThreadPoolExecutor
+from app.services.summarizer import generate_summary
 import docx
 import asyncio
 import pytesseract
@@ -57,20 +58,28 @@ def extract_text(file: UploadFile):
     #     except Exception as e:
     #         raise HTTPException(status_code=500,detail=f"OCR Failed {e}")
 
-        
+     
 
     return text.strip()
 #push the uploaded file to the server/api
 @router.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_and_summarize(file: UploadFile = File(...), summary_style: str = Form(...),embed=True):
     loop = asyncio.get_event_loop()
+
+    #extract the text
     text = await loop.run_in_executor(executor, extract_text,file)
+    #generate summary
+    summary_text = await generate_summary(text, summary_style)
+    
+
     return{
         "file_name":file.filename,
         "file_type":file.content_type,
-        "extracted_text":text[:1000]
-    }
+        "extracted_text":text[:1000],
+        "summary_text": summary_text,
+        "summary_style": summary_style,
 
+    }
 
 
 
