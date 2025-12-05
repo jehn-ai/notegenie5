@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import docx
 import asyncio
 import pytesseract
-from PIL import Image
+# from PIL import Image
 
 
 
@@ -13,7 +13,7 @@ router = APIRouter()
 executor = ThreadPoolExecutor()
 
 #set of allowed file format
-Allowed_Extension=["pdf","txt","docx","png","jpeg","jpg"]
+Allowed_Extension=["pdf","txt","docx"]
 
 #extraction function
 
@@ -49,13 +49,13 @@ def extract_text(file: UploadFile):
         doc = docx.Document(file.file)
         for para in doc.paragraphs:
             text += para.text + "\n"
-#image to text 
-    elif ext in ["png","jpeg","jpg"]:
-        try:
-            image = Image.open(file.file)
-            text= pytesseract.image_to_string(image)
-        except Exception as e:
-            raise HTTPException(status_code=500,detail=f"OCR Failed {e}")
+#image to text (been removed for now)
+    # elif ext in ["png","jpeg","jpg"]:
+    #     try:
+    #         image = Image.open(file.file)
+    #         text= pytesseract.image_to_string(image)
+    #     except Exception as e:
+    #         raise HTTPException(status_code=500,detail=f"OCR Failed {e}")
 
         
 
