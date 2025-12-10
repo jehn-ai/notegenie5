@@ -1,20 +1,23 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI
 from PyPDF2 import PdfReader
 from pdf2image import convert_from_bytes
 from concurrent.futures import ThreadPoolExecutor
 from app.services.summarizer import generate_summary
+from middleware.error_handler import HideServerErrorsMiddleware
 import docx
 import asyncio
 import pytesseract
 # from PIL import Image
 
-
-
+app = FastAPI()
 router = APIRouter()
 executor = ThreadPoolExecutor()
 
 #set of allowed file format
 Allowed_Extension=["pdf","txt","docx"]
+#adding a protect api
+app.add_middleware(HideServerErrorsMiddleware)
 
 #extraction function
 
