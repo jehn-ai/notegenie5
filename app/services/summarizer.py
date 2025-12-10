@@ -59,13 +59,16 @@ async def generate_summary(text: str, style: str) -> str:
     )
 
     payload = {
-        "content":[
+        "contents":[
             {
-                "role":"user",
-                "parts": [{"type":"text","text":prompt}]
+                "parts":[
+                    {"text": prompt}
+                ]
             }
         ],
-        "temperature":0
+        "generationConfig": {
+            "temperature":0
+        }
     }
 
     try:
@@ -77,7 +80,7 @@ async def generate_summary(text: str, style: str) -> str:
             data = response.json()
 
             try:
-                return data["candidate"][0]["content"]["parts"][0]["text"]
+                return data["candidates"][0]["content"]["parts"][0]["text"]
             except Exception:
                 raise HTTPException(status_code=500, detail="unexpected error from NGA")
 
