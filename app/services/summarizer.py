@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 import httpx
 import os
+import asyncio
 
 router = APIRouter()
 Gemini_Api_Key = os.getenv("Gemini_Api_Key")
@@ -8,13 +9,11 @@ Model_Name = "gemini-2.0-flash-lite-001"
 
 # error handle
 if not Gemini_Api_Key:
-    raise RuntimeError("Gemini Key Not found,check .env.")
+    raise RuntimeError("Gemini Key Not found, check .env.")
 
 Alowed_style = ["Bullet", "Exam", "Detailed"]
 
-# fuction for prompt NB: NGA means Notegenie Ai = Gemini
-
-
+# function for prompt NB: NGA means Notegenie Ai = Gemini
 def build_prompt(text: str, style: str) -> str:
     style = style.lower()
 
@@ -41,12 +40,35 @@ Summary formats:
 - detailed → well-structured academic paragraphs.
 
 Text to summarize:
-\"\"\"{text}\"\"\""""
+\"\"\"{text}\"\"\"
+"""
+
+
+# RETRY + THROTTLE HELPER
+MAX_RETRIES = 3     
+THROTTLE_SECONDS = 2  
+
+async def call_gemini_with_retry(url, payload):
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            timeout = httpx.Timeout(120.0, read=120.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                return response.json()  # success
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                print(f"Attempt {attempt} - Rate limited. Waiting {THROTTLE_SECONDS}s...")
+                await asyncio.sleep(THROTTLE_SECONDS)
+            else:
+                raise HTTPException(status_code=500, detail=f"NGA API Request Failed: {e}")
+
+    # all retries exhausted
+    raise HTTPException(status_code=429, detail="Too Many Requests to NGA API, please try later.")
 
 
 # function for summary generation
-
-
 async def generate_summary(text: str, style: str) -> str:
     if not text.strip():
         raise HTTPException(
@@ -55,7 +77,7 @@ async def generate_summary(text: str, style: str) -> str:
     prompt = build_prompt(text, style)
 
     url = (
-       f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite-001:generateContent?key={Gemini_Api_Key}"
+       f"https://generativelanguage.googleapis.com/v1beta/models/{Model_Name}:generateContent?key={Gemini_Api_Key}"
     )
 
     payload = {
@@ -71,18 +93,10 @@ async def generate_summary(text: str, style: str) -> str:
         }
     }
 
+    # call Gemini with retry + throttle
+    data = await call_gemini_with_retry(url, payload)
+
     try:
-        timeout= httpx.Timeout(120.0, read= 120.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-
-            data = response.json()
-
-            try:
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-            except Exception:
-                raise HTTPException(status_code=500, detail="unexpected error from NGA")
-
-    except httpx.HTTPError as e:
-        raise HTTPException(status_code=500, detail=f"NGA API Request Failed {e}")
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception:
+        raise HTTPException(status_code=500, detail="unexpected error from NGA")
