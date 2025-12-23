@@ -5,6 +5,7 @@ from pdf2image import convert_from_bytes
 from concurrent.futures import ThreadPoolExecutor
 from app.services.summarizer import generate_summary
 from middleware.error_handler import HideServerErrorsMiddleware
+from app.utils.text_chucker import chunk_text
 import docx
 import asyncio
 import pytesseract
@@ -72,17 +73,20 @@ async def upload_and_summarize(file: UploadFile = File(...), summary_style: str 
     #extract the text
     text = await loop.run_in_executor(executor, extract_text,file)
     #generate summary
-    summary_text = await generate_summary(text, summary_style)
+    summary_list = await generate_summary(text, summary_style)
     
 
-    return{
-        "file_name":file.filename,
-        "file_type":file.content_type,
-        "extracted_text":text[:1000],
-        "summary_text": summary_text,
-        "summary_style": summary_style,
+    return {
+    "file_name": file.filename,
+    "file_type": file.content_type,
+    "extracted_text_preview": text[:1000],
+    "summary": summary_list,
+    "summary_style": summary_style,
+    "total_chunks": len(chunk_text(text)),
+}
 
-    }
+
+
 
 
 

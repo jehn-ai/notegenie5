@@ -1,27 +1,27 @@
-from fastapi import APIRouter, HTTPException
-import httpx
+from fastapi import HTTPException
+from app.core.gemini_guard import gemini_semaphore, rpm_guard
+from app.services.gemini_client import call_gemini
+from app.utils.text_chucker import chunk_text
 import os
-import asyncio
 
-router = APIRouter()
 Gemini_Api_Key = os.getenv("Gemini_Api_Key")
 Model_Name = "gemini-2.0-flash-lite-001"
 
-# error handle
 if not Gemini_Api_Key:
-    raise RuntimeError("Gemini Key Not found, check .env.")
+    raise RuntimeError("Gemini API Key not found. Check .env.")
 
-Alowed_style = ["Bullet", "Exam", "Detailed"]
+ALLOWED_STYLES = ["Bullet", "Exam", "Detailed"]
 
-# function for prompt NB: NGA means Notegenie Ai = Gemini
+
 def build_prompt(text: str, style: str) -> str:
-    style = style.lower()
-
-    if style not in [s.lower() for s in Alowed_style]:
+    style_lower = style.lower()
+    if style_lower not in [s.lower() for s in ALLOWED_STYLES]:
         raise HTTPException(
             status_code=422,
-            detail=f"invaild summary style, chose from: {Alowed_style}",
+            detail=f"Invalid summary style. Choose from: {ALLOWED_STYLES}"
         )
+
+    # ⛔ PROMPT UNCHANGED (as requested)
     return f"""
 You are an academic summarization assistant. Summarize the following text according to the user’s chosen style: "{style}". 
 The summary must always follow these global academic standards:
@@ -44,59 +44,55 @@ Text to summarize:
 """
 
 
-# RETRY + THROTTLE HELPER
-MAX_RETRIES = 3     
-THROTTLE_SECONDS = 2  
+# =========================
+# Generate summary (RPM-safe, async-safe)
 
-async def call_gemini_with_retry(url, payload):
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            timeout = httpx.Timeout(120.0, read=120.0)
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                return response.json()  # success
+async def generate_summary(text: str, style: str) -> list[str]:
+    if not text or not text.strip():
+        raise HTTPException(status_code=422, detail="Text cannot be empty.")
 
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                print(f"Attempt {attempt} - Rate limited. Waiting {THROTTLE_SECONDS}s...")
-                await asyncio.sleep(THROTTLE_SECONDS)
-            else:
-                raise HTTPException(status_code=500, detail=f"NGA API Request Failed: {e}")
+    chunks = chunk_text(text)
 
-    # all retries exhausted
-    raise HTTPException(status_code=429, detail="Too Many Requests to NGA API, please try later.")
-
-
-# function for summary generation
-async def generate_summary(text: str, style: str) -> str:
-    if not text.strip():
+    if not chunks:
         raise HTTPException(
-            status_code=422, detail="Text cannot be empty, Upload a file with content"
+            status_code=422,
+            detail="No valid text chunks after preprocessing."
         )
-    prompt = build_prompt(text, style)
 
-    url = (
-       f"https://generativelanguage.googleapis.com/v1beta/models/{Model_Name}:generateContent?key={Gemini_Api_Key}"
-    )
+    summaries: list[str] = []
 
-    payload = {
-        "contents":[
-            {
-                "parts":[
-                    {"text": prompt}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature":0
+    for chunk in chunks:
+        prompt = build_prompt(chunk, style)
+
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}]
+                }
+            ]
         }
-    }
 
-    # call Gemini with retry + throttle
-    data = await call_gemini_with_retry(url, payload)
+        
+        await rpm_guard()                # RPM ≤ 15
+        async with gemini_semaphore:     # concurrency guard
+            result = await call_gemini(
+                Model_Name=Model_Name,
+                payload=payload,
+                Gemini_Api_Key=Gemini_Api_Key
+            )
 
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception:
-        raise HTTPException(status_code=500, detail="unexpected error from NGA")
+        try:
+            text_out = (
+                result["candidates"][0]
+                ["content"]["parts"][0]["text"]
+            )
+            summaries.append(text_out)
+
+        except (KeyError, IndexError):
+            raise HTTPException(
+                status_code=500,
+                detail="Malformed response from Gemini API."
+            )
+
+    return summaries
