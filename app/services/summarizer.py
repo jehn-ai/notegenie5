@@ -1,111 +1,71 @@
+import json
+import os
+import math
+import asyncio
+from typing import List
 from fastapi import HTTPException
-from app.services.gemini_client import call_gemini
-from app.utils.text_chucker import chunk_text
-
-ALLOWED_STYLES = ["Bullet", "Exam", "Detailed"]
+from openrouter_client import call_openrouter_sdk  # Your client from earlier
 
 # =========================
-# Prompt Builder (UNCHANGED LOGIC)
-def build_prompt(text: str, style: str) -> str:
-    if style.lower() not in [s.lower() for s in ALLOWED_STYLES]:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid summary style. Choose from: {ALLOWED_STYLES}"
-        )
+# Load dynamic prompts from JSON
+PROMPT_FILE = os.path.join(os.path.dirname(__file__), "prompts.json")
 
-    return f"""
-You are an academic summarization assistant. Summarize the following text according to the user’s chosen style: "{style}". 
-The summary must always follow these global academic standards:
-
-1. Completeness – include all main ideas, key concepts, arguments, conclusions.
-2. Accuracy – reflect the original content without adding interpretations.
-3. Objectivity – maintain neutrality.
-4. Paraphrasing – use your own words.
-5. Coherence – logical, structured flow.
-6. Brevity – reduce content to 10–30% of original length.
-7. Citation – reference sources if provided.
-
-Summary formats:
-- bullet → concise bullet points for quick revision.
-- exam → high-yield points, definitions, formulas, argument structure.
-- detailed → well-structured academic paragraphs.
-
-Text to summarize:
-\"\"\"{text}\"\"\"
-"""
+with open(PROMPT_FILE, "r", encoding="utf-8") as f:
+    PROMPTS = json.load(f)
 
 # =========================
-# Smart chunk merging
-def merge_small_chunks(chunks, min_chars=800):
-    """
-    Merge small chunks into larger ones to reduce total Gemini requests.
-    - min_chars: target minimum characters per chunk
-    """
-    if not chunks:
-        return []
-
-    merged_chunks = []
-    buffer = ""
-
-    for chunk in chunks:
-        if len(buffer) + len(chunk) < min_chars:
-            buffer += " " + chunk if buffer else chunk
-        else:
-            if buffer:
-                merged_chunks.append(buffer)
-            buffer = chunk
-
-    if buffer:
-        merged_chunks.append(buffer)
-
-    return merged_chunks
+# Chunking helper
+def chunk_text(text: str, max_words: int = 200) -> List[str]:
+   
+    words = text.split()
+    chunks = []
+    for i in range(0, len(words), max_words):
+        chunk = " ".join(words[i:i + max_words])
+        chunks.append(chunk)
+    return chunks
 
 # =========================
-# Generate Summary (SDK-native, fully quota-aware, smart merge)
-async def generate_summary(text: str, style: str) -> list[str]:
-    if not text or not text.strip():
-        raise HTTPException(status_code=422, detail="Text cannot be empty.")
+# Smart merge helper
+def smart_merge(summaries: List[str]) -> str:
+    
+    # Simple approach: join with double newline
+    return "\n\n".join(summaries)
 
-    chunks = chunk_text(text)
-    if not chunks:
-        raise HTTPException(
-            status_code=422,
-            detail="No valid text chunks after preprocessing."
-        )
+# =========================
+# Build prompt dynamically
+def build_prompt(text_chunk: str, style: str) -> str:
+   
+    if style not in PROMPTS:
+        raise HTTPException(status_code=400, detail=f"Invalid summary style: {style}")
+    
+    template = PROMPTS[style]
+    return template.replace("{TEXT_CHUNK}", text_chunk)
 
-    # merge small chunks to reduce requests
-    chunks = merge_small_chunks(chunks)
-
-    all_summaries: list[str] = []
-
+# =========================
+# Main summarizer
+async def summarize_text(text: str, style: str = "Bullet") -> str:
+   
+    # 1. Chunk text
+    chunks = chunk_text(text, max_words=200)
+    
+    # 2. Prepare tasks for async OpenRouter calls
+    tasks = []
     for chunk in chunks:
         prompt = build_prompt(chunk, style)
+        tasks.append(call_openrouter_sdk(prompt))
 
-        # Estimate tokens for this chunk (roughly: 1 token ≈ 4 chars)
-        estimated_tokens = max(50, len(chunk) // 4)
+    try:
+        # 3. Call OpenRouter on all chunks concurrently
+        chunk_summaries = await asyncio.gather(*tasks)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Summarization failed: {str(e)}")
+    
+    # 4. Smart merge summaries
+    final_summary = smart_merge(chunk_summaries)
+    
+    return final_summary
 
-        try:
-            result = await call_gemini(prompt, estimated_tokens=estimated_tokens)
-        except HTTPException as e:
-            if e.status_code in (500, 502, 503):
-                raise HTTPException(
-                    status_code=503,
-                    detail="AI service temporarily unavailable. Please retry."
-                )
-            elif e.status_code == 429:
-                raise HTTPException(
-                    status_code=429,
-                    detail="Gemini quota exceeded. Try again later."
-                )
-            raise
-
-        summaries = result.get("summary")
-        if not summaries or not isinstance(summaries, list):
-            raise HTTPException(
-                status_code=502,
-                detail="Gemini returned invalid structured summary."
-            )
-
-        all_summaries.extend(summaries)
-
-    return all_summaries
+# =================
+# Optional: helper for flashcards (if style=Flashcards)
+async def generate_flashcards(text: str) -> str:
+    return await summarize_text(text, style="Flashcards")

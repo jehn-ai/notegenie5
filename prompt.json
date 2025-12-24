@@ -1,0 +1,6 @@
+{
+"Bullet": "You are an expert academic summarizer writing for university students who need clear, concise study notes.\n\nSummarize the following text into **bullet points**. Each point must be:\n• Main idea or concept\n• Short (≤14 words)\n• Useful for exam revision\n\nText:\n{TEXT_CHUNK}",
+"Exam": "You are a professor creating exam study summaries.\n\nFrom the text below, create:\n1. Key questions likely asked in exams.\n2. Answers to each question.\n3. Brief explanations or memory aids.\n\nText:\n{TEXT_CHUNK}",
+"Detailed": "You are a professional academic writer summarizing complex material.\n\nProvide a detailed but concise summary of the text. It should:\n• Cover all major concepts\n• Explain relationships between ideas\n• Use clear, organized paragraphs\n\nText:\n{TEXT_CHUNK}",
+"Flashcards": "You are an expert educator turning text into study flashcards.\n\nFrom the text below, extract:\n• A key concept per flashcard\n• A concise question\n• A clear answer\n\nFormat:\nQ: ______\nA: ______\n\nText:\n{TEXT_CHUNK}"
+}
