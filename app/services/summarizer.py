@@ -4,11 +4,11 @@ import math
 import asyncio
 from typing import List
 from fastapi import HTTPException
-from openrouter_client import call_openrouter_sdk  # Your client from earlier
+from app.services.openrouter_client import call_openrouter_sdk
 
 # =========================
 # Load dynamic prompts from JSON
-PROMPT_FILE = os.path.join(os.path.dirname(__file__), "prompts.json")
+PROMPT_FILE = os.path.join(os.path.dirname(__file__), "prompt.json")
 
 with open(PROMPT_FILE, "r", encoding="utf-8") as f:
     PROMPTS = json.load(f)
