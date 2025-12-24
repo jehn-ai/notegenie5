@@ -1,27 +1,18 @@
 from fastapi import HTTPException
-from app.core.gemini_guard import gemini_semaphore, rpm_guard
 from app.services.gemini_client import call_gemini
 from app.utils.text_chucker import chunk_text
-import os
-
-Gemini_Api_Key = os.getenv("Gemini_Api_Key")
-Model_Name = "gemini-2.0-flash-lite-001"
-
-if not Gemini_Api_Key:
-    raise RuntimeError("Gemini API Key not found. Check .env.")
 
 ALLOWED_STYLES = ["Bullet", "Exam", "Detailed"]
 
-
+# =========================
+# Prompt Builder (UNCHANGED LOGIC)
 def build_prompt(text: str, style: str) -> str:
-    style_lower = style.lower()
-    if style_lower not in [s.lower() for s in ALLOWED_STYLES]:
+    if style.lower() not in [s.lower() for s in ALLOWED_STYLES]:
         raise HTTPException(
             status_code=422,
             detail=f"Invalid summary style. Choose from: {ALLOWED_STYLES}"
         )
 
-    # ⛔ PROMPT UNCHANGED (as requested)
     return f"""
 You are an academic summarization assistant. Summarize the following text according to the user’s chosen style: "{style}". 
 The summary must always follow these global academic standards:
@@ -43,56 +34,78 @@ Text to summarize:
 \"\"\"{text}\"\"\"
 """
 
+# =========================
+# Smart chunk merging
+def merge_small_chunks(chunks, min_chars=800):
+    """
+    Merge small chunks into larger ones to reduce total Gemini requests.
+    - min_chars: target minimum characters per chunk
+    """
+    if not chunks:
+        return []
+
+    merged_chunks = []
+    buffer = ""
+
+    for chunk in chunks:
+        if len(buffer) + len(chunk) < min_chars:
+            buffer += " " + chunk if buffer else chunk
+        else:
+            if buffer:
+                merged_chunks.append(buffer)
+            buffer = chunk
+
+    if buffer:
+        merged_chunks.append(buffer)
+
+    return merged_chunks
 
 # =========================
-# Generate summary (RPM-safe, async-safe)
-
+# Generate Summary (SDK-native, fully quota-aware, smart merge)
 async def generate_summary(text: str, style: str) -> list[str]:
     if not text or not text.strip():
         raise HTTPException(status_code=422, detail="Text cannot be empty.")
 
     chunks = chunk_text(text)
-
     if not chunks:
         raise HTTPException(
             status_code=422,
             detail="No valid text chunks after preprocessing."
         )
 
-    summaries: list[str] = []
+    # merge small chunks to reduce requests
+    chunks = merge_small_chunks(chunks)
+
+    all_summaries: list[str] = []
 
     for chunk in chunks:
         prompt = build_prompt(chunk, style)
 
-        payload = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": prompt}]
-                }
-            ]
-        }
-
-        
-        await rpm_guard()                # RPM ≤ 15
-        async with gemini_semaphore:     # concurrency guard
-            result = await call_gemini(
-                Model_Name=Model_Name,
-                payload=payload,
-                Gemini_Api_Key=Gemini_Api_Key
-            )
+        # Estimate tokens for this chunk (roughly: 1 token ≈ 4 chars)
+        estimated_tokens = max(50, len(chunk) // 4)
 
         try:
-            text_out = (
-                result["candidates"][0]
-                ["content"]["parts"][0]["text"]
-            )
-            summaries.append(text_out)
+            result = await call_gemini(prompt, estimated_tokens=estimated_tokens)
+        except HTTPException as e:
+            if e.status_code in (500, 502, 503):
+                raise HTTPException(
+                    status_code=503,
+                    detail="AI service temporarily unavailable. Please retry."
+                )
+            elif e.status_code == 429:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Gemini quota exceeded. Try again later."
+                )
+            raise
 
-        except (KeyError, IndexError):
+        summaries = result.get("summary")
+        if not summaries or not isinstance(summaries, list):
             raise HTTPException(
-                status_code=500,
-                detail="Malformed response from Gemini API."
+                status_code=502,
+                detail="Gemini returned invalid structured summary."
             )
 
-    return summaries
+        all_summaries.extend(summaries)
+
+    return all_summaries
